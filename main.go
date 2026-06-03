@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -13,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/manifoldco/promptui"
 )
 
 const todoDirName = ".todo"
@@ -262,90 +263,49 @@ func handleEdit(args []string) {
 // chooseTodoInteractive renders a simple interactive list where the user can
 // move with arrow keys and press Enter to select. Returns the selected todo ID.
 func chooseTodoInteractive(todos []Todo) (int, error) {
+	// Use promptui for a robust interactive selector with arrow-key support.
 	if len(todos) == 0 {
 		return -1, nil
 	}
 
-	// Use stty on /dev/tty to set raw mode so the terminal sequences are sent
-	// directly to the process without echoing. This avoids adding external
-	// dependencies which may not build in some environments.
-	oldStateBytes, _ := exec.Command("sh", "-c", "stty -g < /dev/tty").Output()
-	oldState := strings.TrimSpace(string(oldStateBytes))
-	// Put terminal in raw mode reading from /dev/tty
-	_ = exec.Command("sh", "-c", "stty raw -echo < /dev/tty").Run()
-	defer func() {
-		if oldState != "" {
-			_ = exec.Command("sh", "-c", "stty "+oldState+" < /dev/tty").Run()
-		} else {
-			_ = exec.Command("sh", "-c", "stty -raw echo < /dev/tty").Run()
+	items := make([]string, len(todos))
+	for i, t := range todos {
+		status := "[ ]"
+		if t.Done {
+			status = "[x]"
 		}
-	}()
+		meta := ""
+		if t.Priority != "" {
+			meta = " priority:" + t.Priority
+		}
+		if t.DueDate != "" {
+			meta += " due:" + t.DueDate
+		}
+		items[i] = fmt.Sprintf("%d. %s %s%s", t.ID, status, sanitizeDisplay(t.Text), meta)
+	}
 
-	sel := 0
-	reader := bufio.NewReader(os.Stdin)
-	// initial render
-	for {
-		// clear screen and move cursor home (home then clear is more portable)
-		fmt.Print("\x1b[H\x1b[2J")
-		fmt.Println("Select a todo (use ↑/↓, Enter to choose, q to cancel):")
-		for i, t := range todos {
-			marker := "  "
-			if i == sel {
-				marker = "> "
-			}
-			status := "[ ]"
-			if t.Done {
-				status = "[x]"
-			}
-			meta := ""
-			if t.Priority != "" {
-				meta = " priority:" + t.Priority
-			}
-			if t.DueDate != "" {
-				meta += " due:" + t.DueDate
-			}
-			// left-align with a single space after the marker for consistent formatting
-			// sanitize text to avoid embedded control characters that can shift layout
-			displayText := sanitizeDisplay(t.Text)
-			fmt.Printf("%s%d. %s %s%s\n", marker, t.ID, status, displayText, meta)
-		}
-		// read a byte
-		b, err := reader.ReadByte()
-		if err != nil {
-			return -1, err
-		}
-		if b == 'q' || b == 'Q' {
+	templates := &promptui.SelectTemplates{
+		Label:    "{{ . }}",
+		Active:   "> {{ . }}",
+		Inactive: "  {{ . }}",
+		Selected: "{{ . }}",
+	}
+
+	prompt := promptui.Select{
+		Label:     "Select a todo (use ↑/↓, Enter to choose, q to cancel):",
+		Items:     items,
+		Templates: templates,
+		Size:      10,
+	}
+
+	i, _, err := prompt.Run()
+	if err != nil {
+		if err == promptui.ErrInterrupt || err == promptui.ErrEOF {
 			return -1, nil
 		}
-		if b == '\r' || b == '\n' {
-			return todos[sel].ID, nil
-		}
-		if b == 0x1b {
-			// possible escape sequence
-			b2, err := reader.ReadByte()
-			if err != nil {
-				continue
-			}
-			if b2 == '[' || b2 == 'O' {
-				b3, err := reader.ReadByte()
-				if err != nil {
-					continue
-				}
-				switch b3 {
-				case 'A': // up
-					if sel > 0 {
-						sel--
-					}
-				case 'B': // down
-					if sel < len(todos)-1 {
-						sel++
-					}
-				case 'C': // right - ignore
-				case 'D': // left - ignore
-				}
-			}
-		}
+		return -1, err
 	}
+	return todos[i].ID, nil
 }
 
 // openEditor opens the user's $EDITOR (or vi by default) on a temporary file
@@ -1041,56 +1001,6 @@ func printTodos(todos []Todo, showAll bool) {
 	}
 }
 
-func fatal(err error) {
-	fmt.Fprintf(os.Stderr, "error: %s\n", err)
-	os.Exit(1)
-}
-
-func runGitOutput(args ...string) (string, error) {
-	gitDir, err := gitDirPath()
-	if err != nil {
-		return "", err
-	}
-	cmd := exec.Command("git", args...)
-	cmd.Dir = gitDir
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return strings.TrimSpace(string(output)), fmt.Errorf("%w: %s", err, strings.TrimSpace(string(output)))
-	}
-	return strings.TrimSpace(string(output)), nil
-}
-
-func gitDirPath() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(home, todoDirName), nil
-}
-
-func gitRepoInitialized() bool {
-	dir, err := gitDirPath()
-	if err != nil {
-		return false
-	}
-	_, err = os.Stat(filepath.Join(dir, ".git"))
-	return err == nil
-}
-
-func gitHasRemote() bool {
-	output, err := runGitOutput("remote")
-	return err == nil && strings.TrimSpace(output) != ""
-}
-
-func setGitRemote(remoteURL string) error {
-	if gitHasRemote() {
-		_, err := runGitOutput("remote", "set-url", "origin", remoteURL)
-		return err
-	}
-	_, err := runGitOutput("remote", "add", "origin", remoteURL)
-	return err
-}
-
 func commitAndPush(message string) error {
 	if !gitRepoInitialized() {
 		fmt.Fprintln(os.Stderr, "warning: git repository not initialized, skipping commit/push")
@@ -1115,4 +1025,61 @@ func commitAndPush(message string) error {
 		}
 	}
 	return nil
+}
+
+func todoDirPath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, todoDirName), nil
+}
+
+func runGitOutput(args ...string) (string, error) {
+	path, err := todoFilePath()
+	if err != nil {
+		return "", err
+	}
+	dir := filepath.Dir(path)
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	return strings.TrimSpace(string(out)), err
+}
+
+func gitRepoInitialized() bool {
+	dir, err := todoDirPath()
+	if err != nil {
+		return false
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
+		return true
+	}
+	return false
+}
+
+func gitHasRemote() bool {
+	out, err := runGitOutput("remote")
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(out) != ""
+}
+
+func setGitRemote(remote string) error {
+	// try add, fall back to set-url
+	if _, err := runGitOutput("remote", "add", "origin", remote); err != nil {
+		if _, err2 := runGitOutput("remote", "set-url", "origin", remote); err2 != nil {
+			return fmt.Errorf("failed to set git remote: %v / %v", err, err2)
+		}
+	}
+	return nil
+}
+
+func fatal(err error) {
+	if err == nil {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "error: %s\n", err)
+	os.Exit(1)
 }
