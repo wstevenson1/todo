@@ -266,16 +266,18 @@ func chooseTodoInteractive(todos []Todo) (int, error) {
 		return -1, nil
 	}
 
-	// Save current stty settings
-	oldStateBytes, _ := exec.Command("stty", "-g").Output()
+	// Use stty on /dev/tty to set raw mode so the terminal sequences are sent
+	// directly to the process without echoing. This avoids adding external
+	// dependencies which may not build in some environments.
+	oldStateBytes, _ := exec.Command("sh", "-c", "stty -g < /dev/tty").Output()
 	oldState := strings.TrimSpace(string(oldStateBytes))
-	// Put terminal in raw mode
-	_ = exec.Command("stty", "raw", "-echo").Run()
+	// Put terminal in raw mode reading from /dev/tty
+	_ = exec.Command("sh", "-c", "stty raw -echo < /dev/tty").Run()
 	defer func() {
 		if oldState != "" {
-			_ = exec.Command("stty", oldState).Run()
+			_ = exec.Command("sh", "-c", "stty "+oldState+" < /dev/tty").Run()
 		} else {
-			_ = exec.Command("stty", "-raw", "echo").Run()
+			_ = exec.Command("sh", "-c", "stty -raw echo < /dev/tty").Run()
 		}
 	}()
 
