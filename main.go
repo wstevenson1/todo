@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -269,16 +270,17 @@ func chooseTodoInteractive(todos []Todo) (int, error) {
 	oldStateBytes, _ := exec.Command("stty", "-g").Output()
 	oldState := strings.TrimSpace(string(oldStateBytes))
 	// Put terminal in raw mode
-	_ = exec.Command("stty", "-icanon", "min", "1", "-echo").Run()
+	_ = exec.Command("stty", "raw", "-echo").Run()
 	defer func() {
 		if oldState != "" {
 			_ = exec.Command("stty", oldState).Run()
 		} else {
-			_ = exec.Command("stty", "echo", "icanon").Run()
+			_ = exec.Command("stty", "-raw", "echo").Run()
 		}
 	}()
 
 	sel := 0
+	reader := bufio.NewReader(os.Stdin)
 	// initial render
 	for {
 		// clear screen
@@ -305,29 +307,39 @@ func chooseTodoInteractive(todos []Todo) (int, error) {
 			}
 		}
 
-		// read bytes
-		buf := make([]byte, 3)
-		n, err := os.Stdin.Read(buf)
-		if err != nil || n == 0 {
+		// read a byte
+		b, err := reader.ReadByte()
+		if err != nil {
 			return -1, err
 		}
-		b := buf[0]
 		if b == 'q' || b == 'Q' {
 			return -1, nil
 		}
 		if b == '\r' || b == '\n' {
 			return todos[sel].ID, nil
 		}
-		if b == 0x1b && n >= 3 && buf[1] == '[' {
-			// arrow keys
-			switch buf[2] {
-			case 'A': // up
-				if sel > 0 {
-					sel--
+		if b == 0x1b {
+			// possible escape sequence
+			b2, err := reader.ReadByte()
+			if err != nil {
+				continue
+			}
+			if b2 == '[' || b2 == 'O' {
+				b3, err := reader.ReadByte()
+				if err != nil {
+					continue
 				}
-			case 'B': // down
-				if sel < len(todos)-1 {
-					sel++
+				switch b3 {
+				case 'A': // up
+					if sel > 0 {
+						sel--
+					}
+				case 'B': // down
+					if sel < len(todos)-1 {
+						sel++
+					}
+				case 'C': // right - ignore
+				case 'D': // left - ignore
 				}
 			}
 		}
