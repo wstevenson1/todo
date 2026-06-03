@@ -287,8 +287,9 @@ func chooseTodoInteractive(todos []Todo) (int, error) {
 		fmt.Print("\x1b[H\x1b[2J")
 		fmt.Println("Select a todo (use ↑/↓, Enter to choose, q to cancel):")
 		for i, t := range todos {
+			marker := "   "
 			if i == sel {
-				fmt.Print("\x1b[7m") // reverse
+				marker = ">  "
 			}
 			status := "[ ]"
 			if t.Done {
@@ -301,10 +302,7 @@ func chooseTodoInteractive(todos []Todo) (int, error) {
 			if t.DueDate != "" {
 				meta += " due:" + t.DueDate
 			}
-			fmt.Printf("%d. %s %s%s\n", t.ID, status, t.Text, meta)
-			if i == sel {
-				fmt.Print("\x1b[0m")
-			}
+			fmt.Printf("%s%d. %s %s%s\n", marker, t.ID, status, t.Text, meta)
 		}
 
 		// read a byte
