@@ -285,13 +285,13 @@ func chooseTodoInteractive(todos []Todo) (int, error) {
 	reader := bufio.NewReader(os.Stdin)
 	// initial render
 	for {
-		// clear screen
-		fmt.Print("\x1b[H\x1b[2J")
+		// clear screen and move cursor home
+		fmt.Print("\x1b[2J\x1b[H")
 		fmt.Println("Select a todo (use ↑/↓, Enter to choose, q to cancel):")
 		for i, t := range todos {
-			marker := "   "
+			marker := "  "
 			if i == sel {
-				marker = ">  "
+				marker = "> "
 			}
 			status := "[ ]"
 			if t.Done {
@@ -304,9 +304,11 @@ func chooseTodoInteractive(todos []Todo) (int, error) {
 			if t.DueDate != "" {
 				meta += " due:" + t.DueDate
 			}
-			fmt.Printf("%s%d. %s %s%s\n", marker, t.ID, status, t.Text, meta)
+			// left-align with a single space after the marker for consistent formatting
+			// sanitize text to avoid embedded control characters that can shift layout
+			displayText := sanitizeDisplay(t.Text)
+			fmt.Printf("%s%d. %s %s%s\n", marker, t.ID, status, displayText, meta)
 		}
-
 		// read a byte
 		b, err := reader.ReadByte()
 		if err != nil {
@@ -379,6 +381,23 @@ func openEditor(initial string) (string, error) {
 		return "", err
 	}
 	return string(out), nil
+}
+
+func sanitizeDisplay(s string) string {
+	// replace control characters (except newline) with a single space
+	var b strings.Builder
+	for _, r := range s {
+		if r == '\n' || r == '\r' {
+			b.WriteRune(' ')
+			continue
+		}
+		if r < 0x20 || r == 0x7f {
+			b.WriteRune(' ')
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return strings.TrimSpace(b.String())
 }
 
 func handleList(args []string) {
