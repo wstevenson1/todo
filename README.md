@@ -59,3 +59,13 @@ Todo items are stored in JSON at `~/.todo/todos.json`:
 
 - New fields are optional and omitted when empty.
 - The CLI uses only Go standard library packages.
+
+## Interactive editing and editor
+
+- You can run `todo edit` with no arguments to interactively select a task using the arrow keys and press Enter to choose one.
+- When the editor is needed, the CLI uses the `EDITOR` environment variable. If `EDITOR` is not set, `vi` is used by default. For example:
+
+```bash
+export EDITOR="code --wait"
+todo edit 1
+```

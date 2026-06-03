@@ -181,18 +181,31 @@ func handleAdd(args []string) {
 }
 
 func handleEdit(args []string) {
-	if len(args) < 2 {
-		printUsageAndExit("todo edit requires id and text")
+	// Support three modes:
+	// 1) `todo edit <id> <text>` - inline edit
+	// 2) `todo edit <id>` - open $EDITOR to edit the todo text
+	// 3) `todo edit` - interactive selection via arrow keys, then open editor
+
+	if len(args) == 0 {
+		// interactive selection
+		todos, err := loadTodos()
+		if err != nil {
+			fatal(err)
+		}
+		selID, err := chooseTodoInteractive(todos)
+		if err != nil {
+			fatal(err)
+		}
+		if selID <= 0 {
+			fmt.Println("No selection")
+			return
+		}
+		args = []string{strconv.Itoa(selID)}
 	}
 
 	id, err := strconv.Atoi(args[0])
 	if err != nil || id <= 0 {
 		fatal(errors.New("invalid todo id"))
-	}
-
-	text := strings.TrimSpace(strings.Join(args[1:], " "))
-	if text == "" {
-		fatal(errors.New("todo text cannot be empty"))
 	}
 
 	todos, err := loadTodos()
@@ -205,17 +218,155 @@ func handleEdit(args []string) {
 		fatal(fmt.Errorf("todo %d not found", id))
 	}
 
-	todos[index].Text = text
+	// If additional args present, treat as inline text
+	if len(args) >= 2 {
+		text := strings.TrimSpace(strings.Join(args[1:], " "))
+		if text == "" {
+			fatal(errors.New("todo text cannot be empty"))
+		}
+		todos[index].Text = text
+		if err := saveTodos(todos); err != nil {
+			fatal(err)
+		}
+		message := fmt.Sprintf("Update todo #%d text", id)
+		if err := commitAndPush(message); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: %s\n", err)
+		}
+		fmt.Printf("Edited todo #%d\n", id)
+		return
+	}
+
+	// No inline text: open editor
+	editorText := todo.Text
+	edited, err := openEditor(editorText)
+	if err != nil {
+		fatal(fmt.Errorf("editor failed: %w", err))
+	}
+	edited = strings.TrimSpace(edited)
+	if edited == "" {
+		fmt.Println("Edit cancelled or empty text; no changes made")
+		return
+	}
+	todos[index].Text = edited
 	if err := saveTodos(todos); err != nil {
 		fatal(err)
 	}
-
-	message := fmt.Sprintf("Update todo #%d text", id)
+	message := fmt.Sprintf("Update todo #%d text (editor)", id)
 	if err := commitAndPush(message); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: %s\n", err)
 	}
-
 	fmt.Printf("Edited todo #%d\n", id)
+}
+
+// chooseTodoInteractive renders a simple interactive list where the user can
+// move with arrow keys and press Enter to select. Returns the selected todo ID.
+func chooseTodoInteractive(todos []Todo) (int, error) {
+	if len(todos) == 0 {
+		return -1, nil
+	}
+
+	// Save current stty settings
+	oldStateBytes, _ := exec.Command("stty", "-g").Output()
+	oldState := strings.TrimSpace(string(oldStateBytes))
+	// Put terminal in raw mode
+	_ = exec.Command("stty", "-icanon", "min", "1", "-echo").Run()
+	defer func() {
+		if oldState != "" {
+			_ = exec.Command("stty", oldState).Run()
+		} else {
+			_ = exec.Command("stty", "echo", "icanon").Run()
+		}
+	}()
+
+	sel := 0
+	// initial render
+	for {
+		// clear screen
+		fmt.Print("\x1b[H\x1b[2J")
+		fmt.Println("Select a todo (use ↑/↓, Enter to choose, q to cancel):")
+		for i, t := range todos {
+			if i == sel {
+				fmt.Print("\x1b[7m") // reverse
+			}
+			status := "[ ]"
+			if t.Done {
+				status = "[x]"
+			}
+			meta := ""
+			if t.Priority != "" {
+				meta = " priority:" + t.Priority
+			}
+			if t.DueDate != "" {
+				meta += " due:" + t.DueDate
+			}
+			fmt.Printf("%d. %s %s%s\n", t.ID, status, t.Text, meta)
+			if i == sel {
+				fmt.Print("\x1b[0m")
+			}
+		}
+
+		// read bytes
+		buf := make([]byte, 3)
+		n, err := os.Stdin.Read(buf)
+		if err != nil || n == 0 {
+			return -1, err
+		}
+		b := buf[0]
+		if b == 'q' || b == 'Q' {
+			return -1, nil
+		}
+		if b == '\r' || b == '\n' {
+			return todos[sel].ID, nil
+		}
+		if b == 0x1b && n >= 3 && buf[1] == '[' {
+			// arrow keys
+			switch buf[2] {
+			case 'A': // up
+				if sel > 0 {
+					sel--
+				}
+			case 'B': // down
+				if sel < len(todos)-1 {
+					sel++
+				}
+			}
+		}
+	}
+}
+
+// openEditor opens the user's $EDITOR (or vi by default) on a temporary file
+// prepopulated with initial, and returns the edited content.
+func openEditor(initial string) (string, error) {
+	editor := os.Getenv("EDITOR")
+	if strings.TrimSpace(editor) == "" {
+		editor = "vi"
+	}
+
+	tmpf, err := os.CreateTemp("", "todo-edit-*.txt")
+	if err != nil {
+		return "", err
+	}
+	tmpPath := tmpf.Name()
+	defer os.Remove(tmpPath)
+	if _, err := tmpf.WriteString(initial); err != nil {
+		tmpf.Close()
+		return "", err
+	}
+	tmpf.Close()
+
+	cmd := exec.Command(editor, tmpPath)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return "", err
+	}
+
+	out, err := os.ReadFile(tmpPath)
+	if err != nil {
+		return "", err
+	}
+	return string(out), nil
 }
 
 func handleList(args []string) {
