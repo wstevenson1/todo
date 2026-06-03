@@ -285,8 +285,8 @@ func chooseTodoInteractive(todos []Todo) (int, error) {
 	reader := bufio.NewReader(os.Stdin)
 	// initial render
 	for {
-		// clear screen and move cursor home
-		fmt.Print("\x1b[2J\x1b[H")
+		// clear screen and move cursor home (home then clear is more portable)
+		fmt.Print("\x1b[H\x1b[2J")
 		fmt.Println("Select a todo (use ↑/↓, Enter to choose, q to cancel):")
 		for i, t := range todos {
 			marker := "  "
